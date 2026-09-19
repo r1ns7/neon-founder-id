@@ -13,6 +13,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 
 const app = express();
 const outputDir = path.join(__dirname, "public", "results");
 const templateDir = path.join(__dirname, "public", "templates");
+const styleReferencePath = path.join(__dirname, "public", "style-reference.png");
 
 function loadLocalEnv() {
   const envPath = path.join(__dirname, ".env");
@@ -78,6 +79,14 @@ app.use(express.json());
 app.use("/results", express.static(outputDir));
 app.use("/templates", express.static(templateDir));
 
+async function getStyleReference(size = 768) {
+  if (!existsSync(styleReferencePath)) return null;
+  return sharp(styleReferencePath)
+    .resize(size, size, { fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 88 })
+    .toBuffer();
+}
+
 function clampNumber(value, min, max, fallback) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
@@ -114,14 +123,15 @@ async function getKimiFaceGuidance(photoBuffer, profile) {
     .resize(768, 768, { fit: "inside", withoutEnlargement: true })
     .jpeg({ quality: 85 })
     .toBuffer();
+  const styleReference = await getStyleReference(768);
 
   const prompt = [
     "You are a portrait retouching art director for a touchscreen career kiosk.",
-    "Analyze the student portrait and the finished poster template. Do not generate or edit an image.",
-    "Target style: a glossy printed profession postcard, like a premium AI career poster photographed on paper.",
+    "Analyze the student portrait, the finished poster template, and the optional style-reference result example. Do not generate or edit an image.",
+    "Use the style-reference only to understand the desired quality: a realistic student fully integrated into a glossy printed profession postcard.",
     "The student's face must look naturally integrated into the illustrated body, not pasted on top.",
     "Prioritize a beautiful realistic face, clean hair contour, believable neck connection, and template-matched lighting.",
-    "The final composite should feel like a real person sitting inside the scene: centered eyes, natural jaw, no black cutout, no sticker edge.",
+    "The final composite should feel like the reference: a real person sitting inside the scene, centered eyes, natural jaw, no black cutout, no sticker edge.",
     "Return compact JSON only, with these fields:",
     "cropFocus: one of top, center, slightly_left, slightly_right;",
     "offsetX: number from -0.08 to 0.08, negative moves the face left;",
@@ -160,11 +170,19 @@ async function getKimiFaceGuidance(photoBuffer, profile) {
                 },
                 {
                   type: "image_url",
-                  image_url: { url: `data:image/jpeg;base64,${template.toString("base64")}` },
-                },
-                { type: "text", text: prompt },
-              ],
+              image_url: { url: `data:image/jpeg;base64,${template.toString("base64")}` },
             },
+            ...(styleReference
+              ? [
+                  {
+                    type: "image_url",
+                    image_url: { url: `data:image/jpeg;base64,${styleReference.toString("base64")}` },
+                  },
+                ]
+              : []),
+            { type: "text", text: prompt },
+          ],
+        },
           ],
         }),
       });
@@ -314,6 +332,7 @@ async function createAiStudentPoster(photoBuffer, profile) {
     fit: "inside",
     withoutEnlargement: true,
   }).jpeg({ quality: 92 }).toBuffer();
+  const styleReference = await getStyleReference(1200);
   const maskSvg = Buffer.from(`
     <svg width="${aiWidth}" height="${aiHeight}" xmlns="http://www.w3.org/2000/svg">
       <rect width="100%" height="100%" fill="white"/>
@@ -339,6 +358,8 @@ async function createAiStudentPoster(photoBuffer, profile) {
   const prompt = [
     "Create a beautiful polished AI profession postcard in the style of a glossy printed career poster.",
     "Use the poster template as a locked composition and the student portrait as the identity reference.",
+    "Use the style-reference image only as a quality and aesthetics reference: realistic integrated student, premium glossy print, cinematic classroom lighting, clean poster layout.",
+    "Do not copy the person, face, exact background, text, QR code, or identity from the style-reference image.",
     "Inside the transparent mask, completely replace the black placeholder with the student's realistic face, hair, ears, jawline, neck, and upper-neck transition.",
     "The final person must look naturally photographed or professionally AI-rendered into the body and scene, not pasted as a flat photo.",
     "Preserve the student's identity: facial proportions, eye shape, nose, lips, skin tone, hairstyle direction, glasses if present, age, and natural expression.",
@@ -355,6 +376,9 @@ async function createAiStudentPoster(photoBuffer, profile) {
   form.append("model", openAiImageModel);
   form.append("image[]", new Blob([templateBuffer], { type: "image/png" }), "template.png");
   form.append("image[]", new Blob([photoForAi], { type: "image/jpeg" }), "student.jpg");
+  if (styleReference) {
+    form.append("image[]", new Blob([styleReference], { type: "image/jpeg" }), "style-reference.jpg");
+  }
   form.append("mask", new Blob([mask], { type: "image/png" }), "mask.png");
   form.append("prompt", prompt);
   form.append("size", "auto");
