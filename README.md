@@ -20,17 +20,20 @@ pnpm dev
 
 ## Нейросетевой режим
 
-Backend умеет подключать Kimi Vision и OpenAI Image Edit. Kimi анализирует портрет и
-шаблон, возвращает настройки кадрирования, света, цвета и масштаба, после чего сервер
+Backend умеет подключать FusionBrain/Kandinsky, Kimi Vision и OpenAI Image Edit.
+FusionBrain генерирует красивую карьерную открытку по профилю. Kimi анализирует портрет
+и шаблон, возвращает настройки кадрирования, света, цвета и масштаба, после чего сервер
 вставляет лицо в размеченную область шаблона. OpenAI Image Edit можно использовать как
 альтернативный полноценный image-edit режим.
 
 1. Скопируйте `.env.example` в `.env`.
-2. Заполните `AI_API_KEY`, `MOONSHOT_API_KEY` или `KIMI_API_KEY` на машине киоска или на защищенном сервере.
+2. Для российского генератора заполните `FUSIONBRAIN_API_KEY` и `FUSIONBRAIN_SECRET_KEY`.
+   Для Kimi заполните `AI_API_KEY`, `MOONSHOT_API_KEY` или `KIMI_API_KEY`.
 3. Запустите `pnpm dev`.
 
-По умолчанию используется Kimi: `AI_IMAGE_PROVIDER=kimi`. OpenAI Image Edit включается
-только явно через `AI_IMAGE_PROVIDER=openai`.
+По умолчанию в `.env.example` выбран FusionBrain: `AI_IMAGE_PROVIDER=fusionbrain`.
+Kimi включается через `AI_IMAGE_PROVIDER=kimi`, OpenAI Image Edit - через
+`AI_IMAGE_PROVIDER=openai`.
 
 Для Kimi Vision по умолчанию используется `kimi-k2.6`. Если `KIMI_BASE_URL` не задан,
 сервер последовательно пробует глобальный endpoint `.ai`, затем endpoint `.cn`.

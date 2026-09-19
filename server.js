@@ -37,6 +37,9 @@ const aiImageProvider = (process.env.AI_IMAGE_PROVIDER?.trim() || "kimi").toLowe
 const genericAiApiKey = process.env.AI_API_KEY?.trim();
 const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
 const openAiImageModel = process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
+const fusionBrainApiKey = process.env.FUSIONBRAIN_API_KEY?.trim();
+const fusionBrainSecretKey = process.env.FUSIONBRAIN_SECRET_KEY?.trim();
+const fusionBrainBaseUrl = (process.env.FUSIONBRAIN_BASE_URL?.trim() || "https://api-key.fusionbrain.ai").replace(/\/$/, "");
 const kimiApiKey =
   process.env.MOONSHOT_API_KEY?.trim() ||
   process.env.KIMI_API_KEY?.trim() ||
@@ -51,6 +54,17 @@ const kimiBaseUrls = [
   .map((url) => url.replace(/\/$/, ""))
   .filter((url, index, urls) => urls.indexOf(url) === index);
 const kimiVisionModel = process.env.KIMI_VISION_MODEL?.trim() || "kimi-k2.6";
+
+const profilePrompts = {
+  architect:
+    "student entrepreneur as a strategic architect, modern academic classroom, cosmic architecture and planning mood, confident calm expression",
+  innovator:
+    "student entrepreneur as an innovator communicator, modern college classroom, purple hoodie, teamwork and ideas on the wall, warm sunlight, confident natural portrait",
+  owner:
+    "student entrepreneur as a practical business owner, modern workshop classroom, laptop, notebooks, startup atmosphere, confident focused portrait",
+  hybrid:
+    "student entrepreneur with hybrid strategic and communication profile, modern academic classroom, purple accents, bright cinematic realistic portrait",
+};
 
 const templateConfigs = {
   architect: {
@@ -305,6 +319,76 @@ async function createKimiStudentPoster(photoBuffer, profile) {
   return createStudentPoster(photoBuffer, profile, guidance);
 }
 
+async function pollFusionBrainResult(uuid) {
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const response = await fetch(`${fusionBrainBaseUrl}/key/api/v1/text2image/status/${uuid}`, {
+      headers: {
+        "X-Key": `Key ${fusionBrainApiKey}`,
+        "X-Secret": `Secret ${fusionBrainSecretKey}`,
+      },
+    });
+    if (!response.ok) {
+      const details = await response.text();
+      throw new Error(`FusionBrain status failed (${response.status}): ${details.slice(0, 500)}`);
+    }
+    const payload = await response.json();
+    if (payload.status === "DONE" && payload.images?.[0]) {
+      return Buffer.from(payload.images[0], "base64");
+    }
+    if (payload.status === "FAIL") {
+      throw new Error(`FusionBrain generation failed: ${payload.errorDescription || "unknown error"}`);
+    }
+  }
+  throw new Error("FusionBrain generation timed out");
+}
+
+async function createFusionBrainPoster(profile) {
+  if (!fusionBrainApiKey || !fusionBrainSecretKey) {
+    throw new Error("FusionBrain keys are missing. Set FUSIONBRAIN_API_KEY and FUSIONBRAIN_SECRET_KEY in .env.");
+  }
+
+  const profileText = profilePrompts[profile] || profilePrompts.hybrid;
+  const params = {
+    type: "GENERATE",
+    numImages: 1,
+    width: 1024,
+    height: 1344,
+    generateParams: {
+      query: [
+        "premium glossy printed career postcard, realistic AI photo poster, Russian academic college visual identity",
+        profileText,
+        "student sitting at desk, natural face, clean skin texture, sharp eyes, realistic hair, integrated body and environment",
+        "purple neon accents, professional poster composition, QR area and result label area left clean at bottom, cinematic classroom lighting",
+        "high detail, realistic reflections, print-ready, no watermark, no random text, no distorted hands, no extra logos",
+      ].join(", "),
+    },
+  };
+
+  const form = new FormData();
+  form.append("params", new Blob([JSON.stringify(params)], { type: "application/json" }), "params.json");
+
+  const response = await fetch(`${fusionBrainBaseUrl}/key/api/v1/text2image/run`, {
+    method: "POST",
+    headers: {
+      "X-Key": `Key ${fusionBrainApiKey}`,
+      "X-Secret": `Secret ${fusionBrainSecretKey}`,
+    },
+    body: form,
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`FusionBrain run failed (${response.status}): ${details.slice(0, 500)}`);
+  }
+
+  const payload = await response.json();
+  if (!payload.uuid) throw new Error("FusionBrain returned no generation uuid");
+
+  const generated = await pollFusionBrainResult(payload.uuid);
+  return sharp(generated).png().toBuffer();
+}
+
 async function createAiStudentPoster(photoBuffer, profile) {
   if (!openAiApiKey) {
     throw new Error("OPENAI_API_KEY is not configured");
@@ -423,7 +507,17 @@ app.post("/api/process-photo", upload.single("photo"), async (req, res) => {
     let aiUsed = false;
     let aiProvider = "sharp";
     let aiError = "";
-    if (kimiApiKey) {
+    if (aiImageProvider === "fusionbrain") {
+      try {
+        result = await createFusionBrainPoster(req.body.profile || "hybrid");
+        aiUsed = true;
+        aiProvider = "fusionbrain";
+      } catch (error) {
+        aiError = error?.message || "FusionBrain generation failed";
+        console.warn("FusionBrain processing failed; trying next processor:", error);
+      }
+    }
+    if (!result && kimiApiKey) {
       try {
         result = await createKimiStudentPoster(req.file.buffer, req.body.profile || "hybrid");
         aiUsed = true;
