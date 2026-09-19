@@ -35,6 +35,16 @@ type Profile = {
   template: string;
 };
 
+type TemplateConfig = {
+  file: string;
+  head: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+};
+
 const scores: Record<AnswerId, number> = { a: 1, b: 2, c: 3, d: 0 };
 
 const sharedAnswers = (items: Record<AnswerId, string>) =>
@@ -190,6 +200,115 @@ const profiles: Record<string, Profile> = {
   },
 };
 
+const templateConfigs: Record<string, TemplateConfig> = {
+  architect: {
+    file: "architect.png",
+    head: { x: 1790, y: 1250, width: 980, height: 1450 },
+  },
+  innovator: {
+    file: "innovator.png",
+    head: { x: 1710, y: 1030, width: 1070, height: 1510 },
+  },
+  owner: {
+    file: "owner.png",
+    head: { x: 1795, y: 1240, width: 960, height: 1420 },
+  },
+  hybrid: {
+    file: "hybrid.jpg",
+    head: { x: 1790, y: 1240, width: 1000, height: 1470 },
+  },
+};
+
+function loadImage(source: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = source;
+  });
+}
+
+function drawCoverImage(
+  context: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+) {
+  const sourceRatio = image.naturalWidth / image.naturalHeight;
+  const targetRatio = width / height;
+  let sourceWidth = image.naturalWidth;
+  let sourceHeight = image.naturalHeight;
+  let sourceX = 0;
+  let sourceY = 0;
+
+  if (sourceRatio > targetRatio) {
+    sourceWidth = sourceHeight * targetRatio;
+    sourceX = (image.naturalWidth - sourceWidth) / 2;
+  } else {
+    sourceHeight = sourceWidth / targetRatio;
+    sourceY = (image.naturalHeight - sourceHeight) * 0.22;
+  }
+
+  context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, x, y, width, height);
+}
+
+async function composeStudentTemplate(photoData: string, profile: Profile) {
+  const config = templateConfigs[profile.template] ?? templateConfigs.hybrid;
+  const templateUrl = `${import.meta.env.BASE_URL}templates/${config.file}`;
+  const [templateImage, photoImage] = await Promise.all([loadImage(templateUrl), loadImage(photoData)]);
+  const canvas = document.createElement("canvas");
+  canvas.width = templateImage.naturalWidth;
+  canvas.height = templateImage.naturalHeight;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas is unavailable");
+
+  context.drawImage(templateImage, 0, 0);
+
+  const { x, y, width, height } = config.head;
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = canvas.width;
+  maskCanvas.height = canvas.height;
+  const mask = maskCanvas.getContext("2d");
+  if (!mask) throw new Error("Canvas mask is unavailable");
+
+  mask.save();
+  mask.filter = "blur(16px)";
+  mask.beginPath();
+  mask.ellipse(x + width / 2, y + height / 2, width * 0.49, height * 0.5, 0, 0, Math.PI * 2);
+  mask.fillStyle = "black";
+  mask.fill();
+  mask.restore();
+  mask.globalCompositeOperation = "source-in";
+  mask.filter = "saturate(1.05) contrast(1.04) brightness(0.96)";
+  drawCoverImage(mask, photoImage, x - width * 0.03, y - height * 0.08, width * 1.06, height * 1.16);
+
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.drawImage(maskCanvas, 0, 0);
+  context.restore();
+
+  const tint = context.createRadialGradient(
+    x + width * 0.2,
+    y + height * 0.12,
+    width * 0.1,
+    x + width * 0.5,
+    y + height * 0.5,
+    height * 0.62,
+  );
+  tint.addColorStop(0, "rgba(255, 224, 196, 0.22)");
+  tint.addColorStop(0.52, "rgba(107, 31, 160, 0.08)");
+  tint.addColorStop(1, "rgba(0, 0, 0, 0)");
+  context.globalCompositeOperation = "soft-light";
+  context.fillStyle = tint;
+  context.fillRect(x - 80, y - 120, width + 160, height + 180);
+  context.globalCompositeOperation = "source-over";
+
+  return canvas.toDataURL("image/jpeg", 0.92);
+}
+
 function getProfile(audience: Audience, answers: Record<number, AnswerId>) {
   const questions = questionSets[audience];
   const block1 = questions
@@ -247,6 +366,10 @@ function App() {
 
   useEffect(() => {
     if (!resultUrl) return;
+    if (!resultUrl.startsWith("/")) {
+      setQr("");
+      return;
+    }
     QRCode.toDataURL(window.location.origin + resultUrl, { margin: 1, width: 260 }).then(setQr);
   }, [resultUrl]);
 
@@ -284,7 +407,18 @@ function App() {
   async function processPhoto(photoData = photo) {
     if (!photoData) return;
     setStep("processing");
-    setStatus("Анализируем лицо и готовим AI-постер...");
+    setStatus("Вставляем фото в студенческий шаблон...");
+
+    if (window.location.hostname.endsWith("github.io")) {
+      try {
+        const composed = await composeStudentTemplate(photoData, outcome.profile);
+        setResultUrl(composed);
+        setStep("result");
+      } catch {
+        setStatus("Не удалось собрать шаблон в браузере. Попробуйте другой кадр.");
+      }
+      return;
+    }
 
     const response = await fetch(photoData);
     const blob = await response.blob();
@@ -302,7 +436,13 @@ function App() {
       setResultUrl(payload.resultUrl);
       setStep("result");
     } catch {
-      setStatus("Не удалось обработать фото. Проверьте сервер или попробуйте другой кадр.");
+      try {
+        const composed = await composeStudentTemplate(photoData, outcome.profile);
+        setResultUrl(composed);
+        setStep("result");
+      } catch {
+        setStatus("Не удалось обработать фото. Проверьте сервер или попробуйте другой кадр.");
+      }
     }
   }
 
@@ -486,12 +626,19 @@ function App() {
             <p className="eyebrow">Готово</p>
             <h2>{outcome.profile.title}</h2>
             <p>{outcome.profile.subtitle}</p>
-            {qr && (
+            {qr ? (
               <div className="qr">
                 <img src={qr} alt="QR-код для скачивания" />
                 <span>
                   <QrCode size={18} />
                   Сканируйте, чтобы забрать фото
+                </span>
+              </div>
+            ) : (
+              <div className="qr text-only">
+                <span>
+                  <QrCode size={18} />
+                  Результат собран в браузере. Используйте кнопку скачивания.
                 </span>
               </div>
             )}

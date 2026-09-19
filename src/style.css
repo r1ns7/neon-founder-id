@@ -511,6 +511,17 @@ button:disabled {
   background: white;
 }
 
+.qr.text-only {
+  justify-items: start;
+  min-height: 92px;
+}
+
+.qr.text-only span {
+  justify-content: center;
+  text-align: center;
+  line-height: 1.35;
+}
+
 @keyframes scan {
   from {
     transform: translateY(-28vh);
