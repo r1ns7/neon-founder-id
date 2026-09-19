@@ -41,9 +41,14 @@ const kimiApiKey =
   process.env.KIMI_API_KEY?.trim() ||
   (aiImageProvider === "kimi" ? genericAiApiKey || openAiApiKey : "");
 const configuredKimiBaseUrl = process.env.KIMI_BASE_URL?.trim();
-const kimiBaseUrls = configuredKimiBaseUrl
-  ? [configuredKimiBaseUrl.replace(/\/$/, "")]
-  : ["https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1"];
+const kimiBaseUrls = [
+  configuredKimiBaseUrl,
+  "https://api.moonshot.ai/v1",
+  "https://api.moonshot.cn/v1",
+]
+  .filter(Boolean)
+  .map((url) => url.replace(/\/$/, ""))
+  .filter((url, index, urls) => urls.indexOf(url) === index);
 const kimiVisionModel = process.env.KIMI_VISION_MODEL?.trim() || "kimi-k2.6";
 
 const templateConfigs = {
@@ -111,11 +116,13 @@ async function getKimiFaceGuidance(photoBuffer, profile) {
     .toBuffer();
 
   const prompt = [
-    "You are preparing a kiosk portrait for insertion into a finished student poster template.",
-    "Analyze the student portrait and the template. The desired final style is a glossy printed career postcard:",
-    "the photographed face should look naturally rebuilt into the illustrated student body, like a real person in the scene.",
-    "Do not generate or edit an image.",
-    "Return compact JSON only with these fields:",
+    "You are a portrait retouching art director for a touchscreen career kiosk.",
+    "Analyze the student portrait and the finished poster template. Do not generate or edit an image.",
+    "Target style: a glossy printed profession postcard, like a premium AI career poster photographed on paper.",
+    "The student's face must look naturally integrated into the illustrated body, not pasted on top.",
+    "Prioritize a beautiful realistic face, clean hair contour, believable neck connection, and template-matched lighting.",
+    "The final composite should feel like a real person sitting inside the scene: centered eyes, natural jaw, no black cutout, no sticker edge.",
+    "Return compact JSON only, with these fields:",
     "cropFocus: one of top, center, slightly_left, slightly_right;",
     "offsetX: number from -0.08 to 0.08, negative moves the face left;",
     "offsetY: number from -0.10 to 0.08, negative moves the face up;",
@@ -124,7 +131,7 @@ async function getKimiFaceGuidance(photoBuffer, profile) {
     "saturation: number from 0.95 to 1.12;",
     "contrast: number from 0.96 to 1.14;",
     "warmth: number from -8 to 8.",
-    "Prefer natural identity preservation, centered eyes, clean hairline, visible neck transition, and lighting close to the template.",
+    "Choose values that preserve identity while making the portrait flattering, balanced, glossy, and professionally printed.",
   ].join(" ");
 
   let payload;
@@ -310,29 +317,38 @@ async function createAiStudentPoster(photoBuffer, profile) {
   const maskSvg = Buffer.from(`
     <svg width="${aiWidth}" height="${aiHeight}" xmlns="http://www.w3.org/2000/svg">
       <rect width="100%" height="100%" fill="white"/>
-      <ellipse
-        cx="${aiHead.x + aiHead.width / 2}"
-        cy="${aiHead.y + aiHead.height / 2}"
-        rx="${aiHead.width * 0.49}"
-        ry="${aiHead.height * 0.5}"
-        fill="black"
-        fill-opacity="0"
-      />
+      <g fill="black" fill-opacity="0">
+        <ellipse
+          cx="${aiHead.x + aiHead.width / 2}"
+          cy="${aiHead.y + aiHead.height * 0.36}"
+          rx="${aiHead.width * 0.45}"
+          ry="${aiHead.height * 0.38}"
+        />
+        <path d="
+          M ${aiHead.x + aiHead.width * 0.26} ${aiHead.y + aiHead.height * 0.50}
+          C ${aiHead.x + aiHead.width * 0.34} ${aiHead.y + aiHead.height * 0.72}, ${aiHead.x + aiHead.width * 0.66} ${aiHead.y + aiHead.height * 0.72}, ${aiHead.x + aiHead.width * 0.74} ${aiHead.y + aiHead.height * 0.50}
+          L ${aiHead.x + aiHead.width * 0.88} ${aiHead.y + aiHead.height * 0.95}
+          L ${aiHead.x + aiHead.width * 0.12} ${aiHead.y + aiHead.height * 0.95}
+          Z
+        "/>
+      </g>
     </svg>
   `);
   const mask = await sharp(maskSvg).png().toBuffer();
 
   const prompt = [
-    "Create a polished glossy career-postcard result like a professional printed profession poster.",
-    "Use the supplied student portrait as the identity source and the supplied poster template as the locked composition.",
-    "Replace only the empty black head/face placeholder inside the mask with the student's realistic face, hair, ears, neck, and natural upper-neck transition.",
-    "The inserted person must look naturally photographed into the scene, not pasted on top.",
-    "Preserve identity, face proportions, skin tone, hairstyle direction, glasses if present, age, and expression.",
-    "Match the head angle, eye line, scale, perspective, studio lighting, color temperature, contrast, sharpness, and shadows to the illustrated body.",
-    "Blend hair edges, jawline, neck, and collar area cleanly. Remove any black placeholder silhouette completely.",
-    "Do not change the template composition, clothing, hands, props, background, logo, QR code, typography, or any existing text.",
-    "Do not add extra people, accessories, text, watermarks, or decorative elements.",
-    "Return a polished finished poster in the same composition.",
+    "Create a beautiful polished AI profession postcard in the style of a glossy printed career poster.",
+    "Use the poster template as a locked composition and the student portrait as the identity reference.",
+    "Inside the transparent mask, completely replace the black placeholder with the student's realistic face, hair, ears, jawline, neck, and upper-neck transition.",
+    "The final person must look naturally photographed or professionally AI-rendered into the body and scene, not pasted as a flat photo.",
+    "Preserve the student's identity: facial proportions, eye shape, nose, lips, skin tone, hairstyle direction, glasses if present, age, and natural expression.",
+    "Make the result flattering: clean skin texture, sharp eyes, natural facial symmetry, realistic hair detail, and no distorted features.",
+    "Match the template exactly for head angle, eye line, scale, perspective, body posture, studio lighting, color temperature, contrast, shadows, and glossy print finish.",
+    "Blend hair edges, jawline, neck, collar, and shoulders smoothly. Remove the black silhouette completely. No visible seams, hard masks, halos, or sticker edges.",
+    "Keep the whole poster premium and print-ready, like the supplied example: bright, clean, cinematic, professional, with realistic reflections and coherent lighting.",
+    "Do not alter anything outside the mask: keep the background, profession scene, clothing, hands, props, logo, QR code, layout, typography, and all existing text unchanged.",
+    "Do not add extra people, accessories, watermarks, random text, new logos, or decorative elements.",
+    "Return only the finished poster, same composition and dimensions.",
   ].join(" ");
 
   const form = new FormData();
