@@ -334,6 +334,7 @@ function App() {
   const [resultUrl, setResultUrl] = useState("");
   const [qr, setQr] = useState("");
   const [status, setStatus] = useState("");
+  const [aiNotice, setAiNotice] = useState("");
   const [cameraError, setCameraError] = useState("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -386,6 +387,7 @@ function App() {
     setResultUrl("");
     setQr("");
     setStatus("");
+    setAiNotice("");
   }
 
   function selectAnswer(id: AnswerId) {
@@ -437,13 +439,26 @@ function App() {
     try {
       const result = await fetch("/api/process-photo", { method: "POST", body: formData });
       if (!result.ok) throw new Error(await result.text());
-      const payload = (await result.json()) as { resultUrl: string };
+      const payload = (await result.json()) as {
+        resultUrl: string;
+        aiUsed?: boolean;
+        aiProvider?: string;
+        aiError?: string;
+      };
       setResultUrl(payload.resultUrl);
+      setAiNotice(
+        payload.aiUsed
+          ? `Нейросетевая обработка: ${payload.aiProvider}.`
+          : payload.aiError
+            ? `Нейросеть не сработала: ${payload.aiError}. Использована локальная сборка.`
+            : "",
+      );
       setStep("result");
     } catch {
       try {
         const composed = await composeStudentTemplate(photoData, outcome.profile);
         setResultUrl(composed);
+        setAiNotice("Серверная нейросеть недоступна. Использована браузерная сборка.");
         setStep("result");
       } catch {
         setStatus("Не удалось обработать фото. Проверьте сервер или попробуйте другой кадр.");
@@ -624,6 +639,7 @@ function App() {
                 : "Скачайте готовую картинку-открытку на устройство. На киоске с сервером этот экран также покажет QR-код для отправки на Email."}
             </p>
             <small>Экран сбросится автоматически через 2 минуты</small>
+            {aiNotice && <small className="ai-notice">{aiNotice}</small>}
             {qr ? (
               <div className="qr">
                 <img src={qr} alt="QR-код для скачивания" />

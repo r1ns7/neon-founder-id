@@ -440,6 +440,16 @@ button:disabled {
   font-size: 15px;
 }
 
+.ai-notice {
+  display: block;
+  padding: 10px 12px;
+  border: 1px solid #ead8ef;
+  border-radius: 10px;
+  background: #fbf4fd;
+  color: #6d3677 !important;
+  line-height: 1.35;
+}
+
 .poster {
   display: grid;
   place-items: center;

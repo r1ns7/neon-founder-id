@@ -422,14 +422,18 @@ app.post("/api/process-photo", upload.single("photo"), async (req, res) => {
     let result;
     let aiUsed = false;
     let aiProvider = "sharp";
+    let aiError = "";
     if (kimiApiKey) {
       try {
         result = await createKimiStudentPoster(req.file.buffer, req.body.profile || "hybrid");
         aiUsed = true;
         aiProvider = "kimi";
       } catch (error) {
+        aiError = error?.message || "Kimi processing failed";
         console.warn("Kimi processing failed; trying next processor:", error);
       }
+    } else if (aiImageProvider === "kimi") {
+      aiError = "Kimi API key is missing. Set MOONSHOT_API_KEY in .env.";
     }
     if (!result && aiImageProvider === "openai" && openAiApiKey) {
       try {
@@ -437,13 +441,19 @@ app.post("/api/process-photo", upload.single("photo"), async (req, res) => {
         aiUsed = true;
         aiProvider = "openai";
       } catch (error) {
+        aiError = error?.message || "OpenAI image edit failed";
         console.warn("AI processing failed; using deterministic compositor:", error);
       }
     }
     result ??= await createStudentPoster(req.file.buffer, req.body.profile || "hybrid");
     const filename = `${id}.png`;
     await fs.writeFile(path.join(outputDir, filename), result);
-    res.json({ resultUrl: `/results/${filename}`, aiUsed, aiProvider });
+    res.json({
+      resultUrl: `/results/${filename}`,
+      aiUsed,
+      aiProvider,
+      aiError: aiUsed ? "" : aiError.replace(/Bearer\s+\S+/gi, "Bearer [redacted]"),
+    });
   } catch (error) {
     console.error(error);
     res.status(500).send("Image processing failed");
