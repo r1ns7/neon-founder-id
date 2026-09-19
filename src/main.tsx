@@ -465,7 +465,11 @@ function App() {
   return (
     <main className="kiosk-shell">
       <header className="topbar">
-        <div className="college-mark">A</div>
+        <img
+          className="college-logo"
+          src={`${import.meta.env.BASE_URL}logo_big.png`}
+          alt="Академический колледж"
+        />
         <div className="college-name">Академический колледж</div>
         <h1>Примерочная профессий будущего</h1>
       </header>

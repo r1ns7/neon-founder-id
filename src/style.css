@@ -17,8 +17,9 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   background:
-    radial-gradient(circle at 50% 15%, rgba(154, 36, 255, 0.32), transparent 30%),
-    linear-gradient(180deg, #09001c 0%, #080014 100%);
+    linear-gradient(rgba(7, 1, 18, 0.42), rgba(7, 1, 18, 0.64)),
+    url("./reference-bg.jpg") center / cover fixed no-repeat,
+    #1a1a1a;
 }
 
 body::before,
@@ -93,22 +94,14 @@ button:disabled {
   text-align: center;
 }
 
-.college-mark {
+.college-logo {
   width: 68px;
   height: 68px;
-  display: grid;
-  place-items: center;
-  border: 2px solid #e8c85e;
   border-radius: 50%;
-  background: #916e19;
-  color: #f9e4a2;
-  font-family: Georgia, serif;
-  font-size: 52px;
-  font-weight: 900;
-  line-height: 1;
+  object-fit: contain;
   box-shadow:
-    0 0 18px rgba(235, 199, 76, 0.5),
-    inset 0 0 0 4px rgba(253, 236, 151, 0.26);
+    0 0 18px rgba(235, 199, 76, 0.42),
+    0 0 0 2px rgba(253, 236, 151, 0.42);
 }
 
 .college-name {
@@ -133,13 +126,30 @@ button:disabled {
   align-content: center;
   gap: 28px;
   border: 1px solid rgba(255, 255, 255, 0.48);
-  border-radius: 28px;
+  border-radius: 50px;
   background: #fffefe;
   box-shadow:
     0 0 0 1px rgba(244, 121, 255, 0.18),
     0 0 26px rgba(244, 89, 255, 0.92),
     0 0 90px rgba(148, 38, 255, 0.58),
     0 28px 80px rgba(0, 0, 0, 0.4);
+  animation: neon-pulse 2s infinite alternate ease-in-out;
+}
+
+@keyframes neon-pulse {
+  0% {
+    box-shadow:
+      0 0 10px rgba(255, 0, 127, 0.5),
+      0 0 20px rgba(127, 0, 255, 0.35),
+      0 0 40px rgba(127, 0, 255, 0.18);
+  }
+
+  100% {
+    box-shadow:
+      0 0 20px rgba(255, 0, 127, 0.82),
+      0 0 40px rgba(127, 0, 255, 0.62),
+      0 0 80px rgba(127, 0, 255, 0.32);
+  }
 }
 
 .intro-copy,
