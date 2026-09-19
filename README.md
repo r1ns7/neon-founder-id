@@ -26,8 +26,14 @@ Backend умеет подключать Kimi Vision и OpenAI Image Edit. Kimi �
 альтернативный полноценный image-edit режим.
 
 1. Скопируйте `.env.example` в `.env`.
-2. Заполните `MOONSHOT_API_KEY` или `KIMI_API_KEY` на машине киоска или на защищенном сервере.
+2. Заполните `AI_API_KEY`, `MOONSHOT_API_KEY` или `KIMI_API_KEY` на машине киоска или на защищенном сервере.
 3. Запустите `pnpm dev`.
+
+По умолчанию используется Kimi: `AI_IMAGE_PROVIDER=kimi`. OpenAI Image Edit включается
+только явно через `AI_IMAGE_PROVIDER=openai`.
+
+Для Kimi Vision по умолчанию используется `kimi-k2.6`. Если `KIMI_BASE_URL` не задан,
+сервер последовательно пробует глобальный endpoint `.ai`, затем endpoint `.cn`.
 
 Если ключ отсутствует или внешний запрос завершился ошибкой, API автоматически использует
 локальную сборку через Sharp. GitHub Pages остается статическим демо и работает через

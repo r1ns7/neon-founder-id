@@ -32,11 +32,19 @@ function loadLocalEnv() {
 
 loadLocalEnv();
 
+const aiImageProvider = (process.env.AI_IMAGE_PROVIDER?.trim() || "kimi").toLowerCase();
+const genericAiApiKey = process.env.AI_API_KEY?.trim();
 const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
 const openAiImageModel = process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
-const kimiApiKey = process.env.MOONSHOT_API_KEY?.trim() || process.env.KIMI_API_KEY?.trim();
-const kimiBaseUrl = (process.env.KIMI_BASE_URL?.trim() || "https://api.moonshot.ai/v1").replace(/\/$/, "");
-const kimiVisionModel = process.env.KIMI_VISION_MODEL?.trim() || "kimi-k3";
+const kimiApiKey =
+  process.env.MOONSHOT_API_KEY?.trim() ||
+  process.env.KIMI_API_KEY?.trim() ||
+  (aiImageProvider === "kimi" ? genericAiApiKey || openAiApiKey : "");
+const configuredKimiBaseUrl = process.env.KIMI_BASE_URL?.trim();
+const kimiBaseUrls = configuredKimiBaseUrl
+  ? [configuredKimiBaseUrl.replace(/\/$/, "")]
+  : ["https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1"];
+const kimiVisionModel = process.env.KIMI_VISION_MODEL?.trim() || "kimi-k2.6";
 
 const templateConfigs = {
   architect: {
@@ -71,6 +79,11 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(max, Math.max(min, number));
 }
 
+function clampText(value, allowed, fallback) {
+  const text = String(value || "").trim();
+  return allowed.includes(text) ? text : fallback;
+}
+
 function parseKimiJson(content) {
   if (!content) return {};
   const match = content.match(/\{[\s\S]*\}/);
@@ -99,61 +112,80 @@ async function getKimiFaceGuidance(photoBuffer, profile) {
 
   const prompt = [
     "You are preparing a kiosk portrait for insertion into a finished student poster template.",
-    "Analyze the student portrait and the template. Do not generate or edit an image.",
+    "Analyze the student portrait and the template. The desired final style is a glossy printed career postcard:",
+    "the photographed face should look naturally rebuilt into the illustrated student body, like a real person in the scene.",
+    "Do not generate or edit an image.",
     "Return compact JSON only with these fields:",
     "cropFocus: one of top, center, slightly_left, slightly_right;",
-    "zoom: number from 1.00 to 1.18;",
-    "brightness: number from 0.92 to 1.08;",
+    "offsetX: number from -0.08 to 0.08, negative moves the face left;",
+    "offsetY: number from -0.10 to 0.08, negative moves the face up;",
+    "zoom: number from 0.98 to 1.16;",
+    "brightness: number from 0.94 to 1.10;",
     "saturation: number from 0.95 to 1.12;",
-    "contrast: number from 0.95 to 1.12.",
-    "Prefer natural identity preservation, centered face, clean hairline, and lighting close to the template.",
+    "contrast: number from 0.96 to 1.14;",
+    "warmth: number from -8 to 8.",
+    "Prefer natural identity preservation, centered eyes, clean hairline, visible neck transition, and lighting close to the template.",
   ].join(" ");
 
-  const response = await fetch(`${kimiBaseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${kimiApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: kimiVisionModel,
-      messages: [
-        {
-          role: "system",
-          content: "You are Kimi, a visual analysis assistant. Return valid JSON only.",
+  let payload;
+  let lastError;
+  for (const baseUrl of kimiBaseUrls) {
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${kimiApiKey}`,
+          "Content-Type": "application/json",
         },
-        {
-          role: "user",
-          content: [
+        body: JSON.stringify({
+          model: kimiVisionModel,
+          messages: [
             {
-              type: "image_url",
-              image_url: { url: `data:image/jpeg;base64,${portrait.toString("base64")}` },
+              role: "system",
+              content: "You are Kimi, a visual analysis assistant. Return valid JSON only.",
             },
             {
-              type: "image_url",
-              image_url: { url: `data:image/jpeg;base64,${template.toString("base64")}` },
+              role: "user",
+              content: [
+                {
+                  type: "image_url",
+                  image_url: { url: `data:image/jpeg;base64,${portrait.toString("base64")}` },
+                },
+                {
+                  type: "image_url",
+                  image_url: { url: `data:image/jpeg;base64,${template.toString("base64")}` },
+                },
+                { type: "text", text: prompt },
+              ],
             },
-            { type: "text", text: prompt },
           ],
-        },
-      ],
-      response_format: { type: "json_object" },
-    }),
-  });
+        }),
+      });
 
-  if (!response.ok) {
-    const details = await response.text();
-    throw new Error(`Kimi vision failed (${response.status}): ${details.slice(0, 500)}`);
+      if (!response.ok) {
+        const details = await response.text();
+        lastError = new Error(`Kimi vision failed (${response.status}): ${details.slice(0, 500)}`);
+        continue;
+      }
+
+      payload = await response.json();
+      break;
+    } catch (error) {
+      lastError = error;
+    }
   }
 
-  const payload = await response.json();
+  if (!payload) throw lastError || new Error("Kimi vision request failed");
   const guidance = parseKimiJson(payload?.choices?.[0]?.message?.content);
   return {
-    cropFocus: String(guidance.cropFocus || "top"),
-    zoom: clampNumber(guidance.zoom, 1, 1.18, 1.06),
-    brightness: clampNumber(guidance.brightness, 0.92, 1.08, 0.97),
+    cropFocus: clampText(guidance.cropFocus, ["top", "center", "slightly_left", "slightly_right"], "top"),
+    offsetX: clampNumber(guidance.offsetX, -0.08, 0.08, 0),
+    offsetY: clampNumber(guidance.offsetY, -0.1, 0.08, -0.02),
+    zoom: clampNumber(guidance.zoom, 0.98, 1.16, 1.04),
+    brightness: clampNumber(guidance.brightness, 0.94, 1.1, 0.99),
     saturation: clampNumber(guidance.saturation, 0.95, 1.12, 1.05),
-    contrast: clampNumber(guidance.contrast, 0.95, 1.12, 1.04),
+    contrast: clampNumber(guidance.contrast, 0.96, 1.14, 1.03),
+    warmth: clampNumber(guidance.warmth, -8, 8, 2),
   };
 }
 
@@ -166,23 +198,42 @@ async function createStudentPoster(photoBuffer, profile, guidance = null) {
   if (!width || !height) throw new Error("Template dimensions are unavailable");
 
   const { x, y, width: headWidth, height: headHeight } = config.head;
-  const zoom = guidance?.zoom ?? 1.06;
+  const zoom = guidance?.zoom ?? 1.04;
   const layerWidth = Math.round(headWidth * zoom);
-  const layerHeight = Math.round(headHeight * (zoom + 0.1));
-  const position = guidance?.cropFocus === "center" ? "center" : "top";
+  const layerHeight = Math.round(headHeight * (zoom + 0.12));
+  const positionMap = {
+    top: "top",
+    center: "center",
+    slightly_left: "left",
+    slightly_right: "right",
+  };
+  const position = positionMap[guidance?.cropFocus] || "top";
   const face = await sharp(photoBuffer)
     .resize(layerWidth, layerHeight, { fit: "cover", position })
     .modulate({
       saturation: guidance?.saturation ?? 1.05,
-      brightness: guidance?.brightness ?? 0.97,
+      brightness: guidance?.brightness ?? 0.99,
+      hue: guidance?.warmth ?? 2,
     })
-    .linear(guidance?.contrast ?? 1.04, 0)
+    .linear(guidance?.contrast ?? 1.03, 0)
+    .sharpen({ sigma: 0.7, m1: 0.7, m2: 1.2 })
     .png()
     .toBuffer();
   const faceMask = Buffer.from(`
     <svg width="${layerWidth}" height="${layerHeight}" xmlns="http://www.w3.org/2000/svg">
-      <defs><filter id="soft"><feGaussianBlur stdDeviation="18"/></filter></defs>
-      <ellipse cx="${layerWidth / 2}" cy="${layerHeight / 2}" rx="${layerWidth * 0.49}" ry="${layerHeight * 0.5}" fill="white" filter="url(#soft)"/>
+      <defs>
+        <filter id="soft"><feGaussianBlur stdDeviation="14"/></filter>
+      </defs>
+      <g fill="white" filter="url(#soft)">
+        <ellipse cx="${layerWidth / 2}" cy="${layerHeight * 0.37}" rx="${layerWidth * 0.38}" ry="${layerHeight * 0.34}"/>
+        <path d="
+          M ${layerWidth * 0.28} ${layerHeight * 0.52}
+          C ${layerWidth * 0.34} ${layerHeight * 0.72}, ${layerWidth * 0.66} ${layerHeight * 0.72}, ${layerWidth * 0.72} ${layerHeight * 0.52}
+          L ${layerWidth * 0.86} ${layerHeight * 0.98}
+          L ${layerWidth * 0.14} ${layerHeight * 0.98}
+          Z
+        "/>
+      </g>
     </svg>
   `);
   const maskedFace = await sharp(face)
@@ -190,12 +241,31 @@ async function createStudentPoster(photoBuffer, profile, guidance = null) {
     .png()
     .toBuffer();
 
+  const left = Math.round(x - (layerWidth - headWidth) / 2 + headWidth * (guidance?.offsetX ?? 0));
+  const top = Math.round(y - headHeight * 0.13 + headHeight * (guidance?.offsetY ?? -0.02));
+  const localLight = Buffer.from(`
+    <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="skinBlend" cx="38%" cy="18%" r="68%">
+          <stop offset="0" stop-color="#fff2df" stop-opacity="0.22"/>
+          <stop offset="0.46" stop-color="#c78bff" stop-opacity="0.08"/>
+          <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <rect x="${left - 80}" y="${top - 70}" width="${layerWidth + 160}" height="${layerHeight + 120}" fill="url(#skinBlend)"/>
+    </svg>
+  `);
+
   return sharp(templatePath)
     .composite([
       {
         input: maskedFace,
-        left: Math.round(x - headWidth * 0.03),
-        top: Math.round(y - headHeight * 0.08),
+        left,
+        top,
+      },
+      {
+        input: localLight,
+        blend: "soft-light",
       },
     ])
     .png()
@@ -253,11 +323,13 @@ async function createAiStudentPoster(photoBuffer, profile) {
   const mask = await sharp(maskSvg).png().toBuffer();
 
   const prompt = [
-    "Edit the supplied poster template using the supplied student portrait.",
-    "Replace only the face/head area inside the transparent oval mask with the real person's face.",
-    "Preserve the person's identity, facial features, skin tone, age, hairline, and natural expression.",
-    "Match the head angle, scale, perspective, lighting, color grading, sharpness, and shadows to the illustrated body.",
-    "Make the transition around the neck and hairline clean and natural.",
+    "Create a polished glossy career-postcard result like a professional printed profession poster.",
+    "Use the supplied student portrait as the identity source and the supplied poster template as the locked composition.",
+    "Replace only the empty black head/face placeholder inside the mask with the student's realistic face, hair, ears, neck, and natural upper-neck transition.",
+    "The inserted person must look naturally photographed into the scene, not pasted on top.",
+    "Preserve identity, face proportions, skin tone, hairstyle direction, glasses if present, age, and expression.",
+    "Match the head angle, eye line, scale, perspective, studio lighting, color temperature, contrast, sharpness, and shadows to the illustrated body.",
+    "Blend hair edges, jawline, neck, and collar area cleanly. Remove any black placeholder silhouette completely.",
     "Do not change the template composition, clothing, hands, props, background, logo, QR code, typography, or any existing text.",
     "Do not add extra people, accessories, text, watermarks, or decorative elements.",
     "Return a polished finished poster in the same composition.",
@@ -319,7 +391,7 @@ app.post("/api/process-photo", upload.single("photo"), async (req, res) => {
         console.warn("Kimi processing failed; trying next processor:", error);
       }
     }
-    if (!result && openAiApiKey) {
+    if (!result && aiImageProvider === "openai" && openAiApiKey) {
       try {
         result = await createAiStudentPoster(req.file.buffer, req.body.profile || "hybrid");
         aiUsed = true;
