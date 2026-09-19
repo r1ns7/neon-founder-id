@@ -34,6 +34,9 @@ loadLocalEnv();
 
 const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
 const openAiImageModel = process.env.OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
+const kimiApiKey = process.env.MOONSHOT_API_KEY?.trim() || process.env.KIMI_API_KEY?.trim();
+const kimiBaseUrl = (process.env.KIMI_BASE_URL?.trim() || "https://api.moonshot.ai/v1").replace(/\/$/, "");
+const kimiVisionModel = process.env.KIMI_VISION_MODEL?.trim() || "kimi-k3";
 
 const templateConfigs = {
   architect: {
@@ -62,7 +65,99 @@ app.use(express.json());
 app.use("/results", express.static(outputDir));
 app.use("/templates", express.static(templateDir));
 
-async function createStudentPoster(photoBuffer, profile) {
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
+function parseKimiJson(content) {
+  if (!content) return {};
+  const match = content.match(/\{[\s\S]*\}/);
+  if (!match) return {};
+  try {
+    return JSON.parse(match[0]);
+  } catch {
+    return {};
+  }
+}
+
+async function getKimiFaceGuidance(photoBuffer, profile) {
+  if (!kimiApiKey) return null;
+
+  const config = templateConfigs[profile] ?? templateConfigs.hybrid;
+  const templatePath = path.join(templateDir, config.file);
+  const portrait = await sharp(photoBuffer)
+    .rotate()
+    .resize(768, 768, { fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 88 })
+    .toBuffer();
+  const template = await sharp(templatePath)
+    .resize(768, 768, { fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 85 })
+    .toBuffer();
+
+  const prompt = [
+    "You are preparing a kiosk portrait for insertion into a finished student poster template.",
+    "Analyze the student portrait and the template. Do not generate or edit an image.",
+    "Return compact JSON only with these fields:",
+    "cropFocus: one of top, center, slightly_left, slightly_right;",
+    "zoom: number from 1.00 to 1.18;",
+    "brightness: number from 0.92 to 1.08;",
+    "saturation: number from 0.95 to 1.12;",
+    "contrast: number from 0.95 to 1.12.",
+    "Prefer natural identity preservation, centered face, clean hairline, and lighting close to the template.",
+  ].join(" ");
+
+  const response = await fetch(`${kimiBaseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${kimiApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: kimiVisionModel,
+      messages: [
+        {
+          role: "system",
+          content: "You are Kimi, a visual analysis assistant. Return valid JSON only.",
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: `data:image/jpeg;base64,${portrait.toString("base64")}` },
+            },
+            {
+              type: "image_url",
+              image_url: { url: `data:image/jpeg;base64,${template.toString("base64")}` },
+            },
+            { type: "text", text: prompt },
+          ],
+        },
+      ],
+      response_format: { type: "json_object" },
+    }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`Kimi vision failed (${response.status}): ${details.slice(0, 500)}`);
+  }
+
+  const payload = await response.json();
+  const guidance = parseKimiJson(payload?.choices?.[0]?.message?.content);
+  return {
+    cropFocus: String(guidance.cropFocus || "top"),
+    zoom: clampNumber(guidance.zoom, 1, 1.18, 1.06),
+    brightness: clampNumber(guidance.brightness, 0.92, 1.08, 0.97),
+    saturation: clampNumber(guidance.saturation, 0.95, 1.12, 1.05),
+    contrast: clampNumber(guidance.contrast, 0.95, 1.12, 1.04),
+  };
+}
+
+async function createStudentPoster(photoBuffer, profile, guidance = null) {
   const config = templateConfigs[profile] ?? templateConfigs.hybrid;
   const templatePath = path.join(templateDir, config.file);
   const templateMetadata = await sharp(templatePath).metadata();
@@ -71,11 +166,17 @@ async function createStudentPoster(photoBuffer, profile) {
   if (!width || !height) throw new Error("Template dimensions are unavailable");
 
   const { x, y, width: headWidth, height: headHeight } = config.head;
-  const layerWidth = Math.round(headWidth * 1.06);
-  const layerHeight = Math.round(headHeight * 1.16);
+  const zoom = guidance?.zoom ?? 1.06;
+  const layerWidth = Math.round(headWidth * zoom);
+  const layerHeight = Math.round(headHeight * (zoom + 0.1));
+  const position = guidance?.cropFocus === "center" ? "center" : "top";
   const face = await sharp(photoBuffer)
-    .resize(layerWidth, layerHeight, { fit: "cover", position: "top" })
-    .modulate({ saturation: 1.05, brightness: 0.97 })
+    .resize(layerWidth, layerHeight, { fit: "cover", position })
+    .modulate({
+      saturation: guidance?.saturation ?? 1.05,
+      brightness: guidance?.brightness ?? 0.97,
+    })
+    .linear(guidance?.contrast ?? 1.04, 0)
     .png()
     .toBuffer();
   const faceMask = Buffer.from(`
@@ -99,6 +200,14 @@ async function createStudentPoster(photoBuffer, profile) {
     ])
     .png()
     .toBuffer();
+}
+
+async function createKimiStudentPoster(photoBuffer, profile) {
+  const guidance = await getKimiFaceGuidance(photoBuffer, profile);
+  if (!guidance) {
+    throw new Error("Kimi API key is not configured");
+  }
+  return createStudentPoster(photoBuffer, profile, guidance);
 }
 
 async function createAiStudentPoster(photoBuffer, profile) {
@@ -200,10 +309,21 @@ app.post("/api/process-photo", upload.single("photo"), async (req, res) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let result;
     let aiUsed = false;
-    if (openAiApiKey) {
+    let aiProvider = "sharp";
+    if (kimiApiKey) {
+      try {
+        result = await createKimiStudentPoster(req.file.buffer, req.body.profile || "hybrid");
+        aiUsed = true;
+        aiProvider = "kimi";
+      } catch (error) {
+        console.warn("Kimi processing failed; trying next processor:", error);
+      }
+    }
+    if (!result && openAiApiKey) {
       try {
         result = await createAiStudentPoster(req.file.buffer, req.body.profile || "hybrid");
         aiUsed = true;
+        aiProvider = "openai";
       } catch (error) {
         console.warn("AI processing failed; using deterministic compositor:", error);
       }
@@ -211,7 +331,7 @@ app.post("/api/process-photo", upload.single("photo"), async (req, res) => {
     result ??= await createStudentPoster(req.file.buffer, req.body.profile || "hybrid");
     const filename = `${id}.png`;
     await fs.writeFile(path.join(outputDir, filename), result);
-    res.json({ resultUrl: `/results/${filename}`, aiUsed });
+    res.json({ resultUrl: `/results/${filename}`, aiUsed, aiProvider });
   } catch (error) {
     console.error(error);
     res.status(500).send("Image processing failed");
