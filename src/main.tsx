@@ -2,22 +2,19 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowLeft,
-  BadgeCheck,
   Camera,
   Check,
   Download,
   Loader2,
   QrCode,
   RefreshCcw,
-  ScanFace,
-  Sparkles,
   Upload,
 } from "lucide-react";
 import QRCode from "qrcode";
 import "./style.css";
 
 type Audience = "students" | "pros";
-type Step = "welcome" | "quiz" | "consent" | "photo" | "processing" | "result";
+type Step = "welcome" | "instruction" | "quiz" | "accepted" | "photo" | "processing" | "result";
 type AnswerId = "a" | "b" | "c" | "d";
 
 type Question = {
@@ -342,9 +339,11 @@ function App() {
   const streamRef = useRef<MediaStream | null>(null);
 
   const questions = questionSets[audience];
-  const current = questions[questionIndex];
+  const currentIndex = Math.min(questionIndex, questions.length - 1);
+  const current = questions[currentIndex];
   const complete = Object.keys(answers).length === questions.length;
   const outcome = useMemo(() => getProfile(audience, answers), [answers, audience]);
+  const progressPercent = step === "accepted" ? 100 : Math.round((questionIndex / questions.length) * 100);
 
   useEffect(() => {
     if (step !== "photo") return;
@@ -373,6 +372,12 @@ function App() {
     QRCode.toDataURL(window.location.origin + resultUrl, { margin: 1, width: 260 }).then(setQr);
   }, [resultUrl]);
 
+  useEffect(() => {
+    if (step !== "result") return;
+    const timer = window.setTimeout(restart, 120000);
+    return () => window.clearTimeout(timer);
+  }, [step]);
+
   function restart() {
     setStep("welcome");
     setQuestionIndex(0);
@@ -386,8 +391,8 @@ function App() {
   function selectAnswer(id: AnswerId) {
     setAnswers((prev) => ({ ...prev, [current.id]: id }));
     window.setTimeout(() => {
-      if (questionIndex < questions.length - 1) setQuestionIndex((index) => index + 1);
-      else setStep("consent");
+      if (questionIndex < questions.length - 1) setQuestionIndex((index) => Math.min(index + 1, questions.length - 1));
+      else setStep("accepted");
     }, 180);
   }
 
@@ -407,7 +412,7 @@ function App() {
   async function processPhoto(photoData = photo) {
     if (!photoData) return;
     setStep("processing");
-    setStatus("Вставляем фото в студенческий шаблон...");
+    setStatus("Формируем вашу картинку-открытку...");
 
     if (window.location.hostname.endsWith("github.io")) {
       try {
@@ -459,63 +464,64 @@ function App() {
 
   return (
     <main className="kiosk-shell">
-      <div className="scanline" />
       <header className="topbar">
-        <div className="brand">
-          <ScanFace />
-          <span>Neon Founder ID</span>
-        </div>
-        <div className="status-pill">
-          <Sparkles size={18} />
-          AI photo kiosk
-        </div>
+        <div className="college-mark">A</div>
+        <div className="college-name">Академический колледж</div>
+        <h1>Примерочная профессий будущего</h1>
       </header>
 
       {step === "welcome" && (
-        <section className="screen welcome">
-          <div className="hero-copy">
-            <p className="eyebrow">Профиль предпринимателя за 5 вопросов</p>
-            <h1>Пройди тест и получи свой AI-образ</h1>
-            <p>
-              Киоск определит тип предпринимателя, выберет визуальный шаблон и подготовит фото с
-              вашим лицом.
-            </p>
+        <section className="quiz-window welcome">
+          <div className="intro-copy">
+            <h2>Добро пожаловать!</h2>
+            <p>Выберите свой предпринимательский профиль для начала тестирования:</p>
           </div>
 
-          <div className="audience-panel">
+          <div className="profile-grid">
             <button
               className={audience === "students" ? "choice active" : "choice"}
               onClick={() => setAudience("students")}
             >
-              Студенты колледжа
+              Профиль для студентов
             </button>
             <button
               className={audience === "pros" ? "choice active" : "choice"}
               onClick={() => setAudience("pros")}
             >
-              Профессионалы
+              Профиль для профессионалов
             </button>
-            <button className="primary big" onClick={() => setStep("quiz")}>
-              <Sparkles />
+            <button className="primary big" onClick={() => setStep("instruction")}>
               Начать
             </button>
           </div>
         </section>
       )}
 
+      {step === "instruction" && (
+        <section className="quiz-window instruction">
+          <p className="section-label">Инструкция</p>
+          <p className="instruction-text">
+            Выберите один вариант ответа на каждый вопрос. Отвечайте интуитивно, правильных ответов нет.
+          </p>
+          <button className="primary big" onClick={() => setStep("quiz")}>
+            Начать тест
+          </button>
+        </section>
+      )}
+
       {step === "quiz" && (
-        <section className="screen quiz">
+        <section className="quiz-window quiz">
           <div className="progress">
+            <b>{progressPercent}%</b>
             <span>
               Вопрос {questionIndex + 1} из {questions.length}
             </span>
             <div>
-              <i style={{ width: `${((questionIndex + 1) / questions.length) * 100}%` }} />
+              <i style={{ width: `${progressPercent}%` }} />
             </div>
           </div>
 
           <article className="question-card">
-            <p className="eyebrow">{current.block === 1 ? "Бизнес-решения" : "Личные качества"}</p>
             <h2>{current.text}</h2>
             <div className="answers">
               {(Object.keys(current.answers) as AnswerId[]).map((id) => (
@@ -524,7 +530,6 @@ function App() {
                   className={answers[current.id] === id ? "answer selected" : "answer"}
                   onClick={() => selectAnswer(id)}
                 >
-                  <b>{id.toUpperCase()}</b>
                   <span>{current.answers[id].text}</span>
                   {answers[current.id] === id && <Check />}
                 </button>
@@ -542,7 +547,7 @@ function App() {
               Назад
             </button>
             {complete && (
-              <button className="primary" onClick={() => setStep("consent")}>
+              <button className="primary" onClick={() => setStep("accepted")}>
                 К результату
               </button>
             )}
@@ -550,41 +555,31 @@ function App() {
         </section>
       )}
 
-      {step === "consent" && (
-        <section className="screen consent">
-          <div className="result-preview">
-            <BadgeCheck />
-            <p className="eyebrow">Ваш профиль</p>
-            <h2>{outcome.profile.title}</h2>
-            <p>{outcome.profile.subtitle}</p>
-            <span>{outcome.profile.fields}</span>
-            <div className="score-grid">
-              <div>
-                <b>{outcome.block1}</b>
-                <small>Блок 1</small>
-              </div>
-              <div>
-                <b>{outcome.block2}</b>
-                <small>Блок 2</small>
-              </div>
+      {step === "accepted" && (
+        <section className="quiz-window accepted">
+          <div className="progress compact">
+            <b>100%</b>
+            <div>
+              <i style={{ width: "100%" }} />
             </div>
           </div>
-          <div className="consent-box">
-            <h2>Сделаем фото для AI-образа?</h2>
-            <p>
-              Фото используется для создания результата на этом киоске. Исходный снимок можно
-              удалять после сессии, а готовые изображения хранить ограниченное время.
-            </p>
-            <button className="primary big" onClick={() => setStep("photo")}>
-              <Camera />
-              Перейти к съемке
-            </button>
-          </div>
+          <h2>Все ответы приняты!</h2>
+          <p>
+            Нажмите на кнопку ниже, чтобы система рассчитала ваш предпринимательский профиль будущего
+            и подготовила картинку-открытку.
+          </p>
+          <button className="primary big" onClick={() => setStep("photo")}>
+            Завершить тест
+          </button>
         </section>
       )}
 
       {step === "photo" && (
-        <section className="screen photo">
+        <section className="quiz-window photo">
+          <div className="photo-copy">
+            <h2>Сделайте фото</h2>
+            <p>Встаньте по центру кадра, смотрите в камеру, лицо должно быть хорошо освещено.</p>
+          </div>
           <div className="camera-frame">
             {cameraError ? (
               <div className="camera-placeholder">{cameraError}</div>
@@ -592,9 +587,7 @@ function App() {
               <video ref={videoRef} autoPlay muted playsInline />
             )}
           </div>
-          <aside className="photo-actions">
-            <h2>Фото для обработки</h2>
-            <p>Встаньте по центру кадра, смотрите в камеру, лицо должно быть хорошо освещено.</p>
+          <div className="photo-actions">
             {photo && <img className="snapshot" src={photo} alt="Снимок пользователя" />}
             <button className="primary" onClick={photo ? () => processPhoto() : capturePhoto}>
               <Camera />
@@ -605,34 +598,31 @@ function App() {
               Загрузить фото
               <input type="file" accept="image/*" onChange={(event) => uploadPhoto(event.target.files?.[0])} />
             </label>
-          </aside>
+          </div>
         </section>
       )}
 
       {step === "processing" && (
-        <section className="screen processing">
+        <section className="quiz-window processing">
           <Loader2 className="spin" />
           <h2>{status}</h2>
-          <p>Демо-движок уже работает локально. Face-swap модель можно подключить следующим слоем.</p>
+          <p>Пожалуйста, подождите несколько секунд.</p>
         </section>
       )}
 
       {step === "result" && (
-        <section className="screen result">
-          <div className="poster">
-            <img src={resultUrl} alt="Готовый AI-постер" />
-          </div>
-          <aside className="result-side">
-            <p className="eyebrow">Готово</p>
-            <h2>{outcome.profile.title}</h2>
-            <p>{outcome.profile.subtitle}</p>
+        <section className="quiz-window result">
+          <div className="result-side">
+            <h2>Результат готов!</h2>
+            <p>
+              {qr
+                ? "Сканируйте QR-код своим смартфоном, чтобы ввести Email и мгновенно получить вашу картинку-открытку на почту."
+                : "Скачайте готовую картинку-открытку на устройство. На киоске с сервером этот экран также покажет QR-код для отправки на Email."}
+            </p>
+            <small>Экран сбросится автоматически через 2 минуты</small>
             {qr ? (
               <div className="qr">
                 <img src={qr} alt="QR-код для скачивания" />
-                <span>
-                  <QrCode size={18} />
-                  Сканируйте, чтобы забрать фото
-                </span>
               </div>
             ) : (
               <div className="qr text-only">
@@ -642,15 +632,20 @@ function App() {
                 </span>
               </div>
             )}
+          </div>
+          <div className="poster">
+            <img src={resultUrl} alt="Готовый AI-постер" />
+          </div>
+          <div className="result-actions">
             <a className="primary" href={resultUrl} download>
               <Download />
               Скачать
             </a>
             <button className="ghost" onClick={restart}>
               <RefreshCcw />
-              Новый участник
+              Начать заново
             </button>
-          </aside>
+          </div>
         </section>
       )}
     </main>
